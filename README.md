@@ -4,7 +4,7 @@
 
 ## 总体架构
 
-![](./fig/framework.png)
+![](fig/framework.png)
 
 ## 运行环境
 
