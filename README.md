@@ -4,7 +4,7 @@
 
 ## 总体架构
 
-![](https://github.com/TimDinggw/GNNinEAFramework/blob/main/fig/framework.png)
+![iamge](https://github.com/TimDinggw/GNNinEAFramework/blob/main/fig/framework.png)
 
 ## 运行环境
 
