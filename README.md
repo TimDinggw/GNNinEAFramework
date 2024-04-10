@@ -20,9 +20,11 @@
 
 数据集:
 
-- DBP15K 从 [HGCN](https://github.com/StephanieWyt/HGCN-JE-JR/) 获取 [数据集](https://drive.google.com/drive/folders/1mfaeLXdqFnOHLYBXiTHWI7MLwtfTgPYQ) 放至 ./data/ 下
+解压data.zip文件
 
-- SRPRS  从 [EvalFramework](https://github.com/YF-SHU/EvalFramework) 获取放至 ./data/ 下，但没有名称初始化词典。
+- DBP15K from [HGCN](https://github.com/StephanieWyt/HGCN-JE-JR/)
+
+- SRPRS  from [EvalFramework](https://github.com/YF-SHU/EvalFramework). 另外，我们利用BERT+Linear(768,300)为其建立了与HGCN中类似的300维的实体名称初始化词典。
 
   
 
