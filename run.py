@@ -336,8 +336,6 @@ if __name__ == '__main__':
     if args.cuda and torch.cuda.is_available():
         torch.cuda.manual_seed(args.seed)
     device = torch.device("cuda" if args.cuda and torch.cuda.is_available() else "cpu")
-    # 目前先只在cpu上允运行
-    device = torch.device("cpu")
 
     d = AlignmentData(data_dir=args.data_dir, train_rate=args.train_rate, val_rate=args.val_rate)
     logger.info(d)
