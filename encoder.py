@@ -14,9 +14,6 @@ from torch_scatter import scatter_add
 
 from utils import *
 from torch_geometric.nn import RGCNConv, SAGEConv, AGNNConv, AntiSymmetricConv, ChebConv, GCNConv, GATv2Conv
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# 目前先只在cpu上允运行
-device = torch.device("cpu")
 
 # --- Main Models: Encoder ---
 class Encoder(torch.nn.Module):
@@ -42,6 +39,7 @@ class Encoder(torch.nn.Module):
         self.skip_conn = skip_conn
         self.ent_num = ent_num
         self.rel_num = rel_num
+        self.device = None
 
         self.rgcn_num_bases = 1
 
@@ -121,6 +119,8 @@ class Encoder(torch.nn.Module):
         #     '''SLEF-DESIGN: extra parameters''
                 
     def forward(self, edges, rels, x, r, others=None):
+        if self.device is None:
+            self.device = x.device
         #print("encoder forward")
         edges = edges.t()
 
@@ -145,10 +145,10 @@ class Encoder(torch.nn.Module):
 
             if self.skip_conn == "residual":
                 residual = x
-                residual = residual.to(device)
+                residual = residual.to(self.device)
             if self.skip_conn == "highway" or self.skip_conn == "concatallhighway":
                 highway_features = x
-                highway_features = highway_features.to(device)
+                highway_features = highway_features.to(self.device)
 
             x = F.dropout(x, p=self.feat_drop, training=self.training)
 
@@ -215,6 +215,7 @@ class GCNAlign_GCNConv(MessagePassing):
         self.out_channels = out_channels
         self.improved = improved
         self.cached = cached
+        self.device = None
 
         self.weight = Parameter(torch.Tensor(1, out_channels))
 
@@ -252,7 +253,9 @@ class GCNAlign_GCNConv(MessagePassing):
 
     def forward(self, x, edge_index, edge_weight=None):
         """"""
-        self.weight = self.weight.to(x.device)
+        if self.device is None:
+            self.device = x.device
+        self.weight = self.weight.to(self.device)
         x = torch.mul(x, self.weight)
 
         if self.cached and self.cached_result is not None:
@@ -369,6 +372,32 @@ class CompGCNConv(MessagePassing):
             self.__class__.__name__, self.in_channels, self.out_channels, self.num_rels)    
 
 
+class SpecialSpmmFunction(torch.autograd.Function):
+    """Special function for only sparse region backpropataion layer."""
+    @staticmethod
+    def forward(ctx, indices, values, shape, b):
+        assert indices.requires_grad == False
+        a = torch.sparse_coo_tensor(indices, values, shape)
+        ctx.save_for_backward(a, b)
+        ctx.N = shape[0]
+        return torch.matmul(a, b)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        a, b = ctx.saved_tensors
+        grad_values = grad_b = None
+        if ctx.needs_input_grad[1]:
+            grad_a_dense = grad_output.matmul(b.t())
+            edge_idx = a._indices()[0, :] * ctx.N + a._indices()[1, :]
+            grad_values = grad_a_dense.view(-1)[edge_idx]
+        if ctx.needs_input_grad[3]:
+            grad_b = a.t().matmul(grad_output)
+        return None, grad_values, None, grad_b
+
+class SpecialSpmm(nn.Module):
+    def forward(self, indices, values, shape, b):
+        return SpecialSpmmFunction.apply(indices, values, shape, b)
+
 class KECGMultiHeadGraphAttention(nn.Module):
     """
     Sparse version GAT layer, similar to https://arxiv.org/abs/1710.10903
@@ -380,16 +409,17 @@ class KECGMultiHeadGraphAttention(nn.Module):
         self.f_in = f_in
         self.f_out = f_out
         self.diag = diag
+        self.device = None
         if self.diag:
-            self.w = Parameter(torch.Tensor(n_head, 1, f_out)).to(device)
+            self.w = Parameter(torch.Tensor(n_head, 1, f_out))
         else:
-            self.w = Parameter(torch.Tensor(n_head, f_in, f_out)).to(device)
+            self.w = Parameter(torch.Tensor(n_head, f_in, f_out))
         self.a_src_dst = Parameter(torch.Tensor(n_head, f_out * 2, 1))
         self.attn_dropout = attn_dropout
         self.leaky_relu = nn.LeakyReLU(negative_slope=0.2)
         self.special_spmm = SpecialSpmm()
         if bias:
-            self.bias = Parameter(torch.Tensor(f_out)).to(device)
+            self.bias = Parameter(torch.Tensor(f_out))
             nn.init.constant_(self.bias, 0)
         else:
             self.register_parameter('bias', None)
@@ -402,6 +432,11 @@ class KECGMultiHeadGraphAttention(nn.Module):
             nn.init.xavier_uniform_(self.a_src_dst)
 
     def forward(self, input, edge):
+        if self.device is None:
+            self.device = input.device
+        self.w = self.w.to(self.device)
+        if self.bias is not None:
+            self.bias = self.bias.to(self.device)
         output = []
         for i in range(self.n_head):
             N = input.size()[0]
@@ -443,6 +478,7 @@ class Dual_AMN_NR_GraphAttention_Layer(nn.Module):
         self.node_hidden = node_hidden
         self.attn_heads = attn_heads
         self.attn_kernels = []
+        self.device = None
 
         for head in range(self.attn_heads):
             attn_kernel = Parameter(torch.Tensor(1 * self.node_hidden, 1))
@@ -454,17 +490,19 @@ class Dual_AMN_NR_GraphAttention_Layer(nn.Module):
     def forward(self, inputs, triple_size):
         features = inputs[0]
         rel_emb = inputs[1]
-        indices = inputs[2].t().to(torch.long).to(features.device)
+        if self.device is None:
+            self.device = features.device
+        indices = inputs[2].t().to(torch.long).to(self.device)
         sparse_indices = inputs[3]
         sparse_val = inputs[4]
 
         features_list = []
         for head in range(self.attn_heads):
-            attention_kernel = self.attn_kernels[head].to(features.device)
+            attention_kernel = self.attn_kernels[head].to(self.device)
             rels_sum = torch.sparse_coo_tensor(sparse_indices.t(), sparse_val,
                                             (triple_size, self.rel_size))
 
-            rels_sum = rels_sum.to(torch.float32).to(features.device)
+            rels_sum = rels_sum.to(torch.float32).to(self.device)
             rel_emb_weight = rel_emb.to(torch.float32)
             rels_sum = torch.sparse.mm(rels_sum, rel_emb_weight)
             print("indices", indices)
