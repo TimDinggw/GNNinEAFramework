@@ -49,7 +49,7 @@ class Experiment:
                 self.ent_embeddings.weight.data.copy_(input_embeddings)
         else:
             raise NotImplementedError("bad ent_init")
-        
+        self.ent_embeddings = self.ent_embeddings.to(device)
         # 初始化 encoder 之后的 enh_ent_embeddings 为 numpy 数组
         self.enh_ent_embeddings = self.ent_embeddings.weight.cpu().detach().numpy()
 
